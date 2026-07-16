@@ -152,6 +152,17 @@ struct MeshSceneView: NSViewRepresentable {
                 let gnomon = Self.makeGnomon(length: CGFloat(max(extent, 1)) * 0.18)
                 gnomon.position = minB
                 root.addChildNode(gnomon)
+                // Fit the depth clip range to the model's scale. A fixed 0.1..1e6
+                // range has a 10-million:1 ratio, so the depth buffer has almost no
+                // precision at the model's distance and the surface z-fights /
+                // flickers while zooming. Scaling near/far to the extent keeps the
+                // ratio a few-thousand:1 (crisp depth) while still bracketing a wide
+                // zoom range around the framed distance (~a few times the radius).
+                if let cam = view.pointOfView?.camera {
+                    let e = Double(max(extent, 1))
+                    cam.zNear = max(e * 0.01, 0.05)
+                    cam.zFar = e * 50
+                }
                 // Frame the camera AND re-centre the orbit pivot on the model ONLY on
                 // the first build (not on every regenerate), so orbiting spins the
                 // anatomy in place and a later scissor cut doesn't snap the view back.
