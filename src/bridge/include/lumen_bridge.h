@@ -308,10 +308,17 @@ enum {
     LUMEN_STAT_COUNT                  // number of entries (array length)
 };
 
-// Fill `out` (at least LUMEN_STAT_COUNT doubles) with segment `id`'s statistics.
-// Zero-fills when `id` is empty or invalid. Reads the mask + volume only and writes
-// no handle state (it crops + marches into its own scratch), so it is safe to run on
-// a worker thread while the caller pins the handle against a concurrent volume swap.
+// Freeze the current mask into the handle's statistics snapshot. Main-thread only,
+// exactly like lumen_mesh_snapshot: call this before dispatching lumen_seg_stats to
+// a worker thread, so the measurement reads a stable copy and never races live mask
+// edits (paint, threshold, undo, ...).
+void lumen_seg_stats_snapshot(LumenVolume* v);
+
+// Fill `out` (at least LUMEN_STAT_COUNT doubles) with segment `id`'s statistics,
+// measured from the snapshot taken by lumen_seg_stats_snapshot (call that first, on
+// the main thread). Zero-fills when `id` is empty/invalid or no snapshot exists.
+// Reads only the frozen snapshot + the immutable HU volume and writes no shared
+// handle buffers, so it is safe on a worker thread while the handle is pinned.
 void lumen_seg_stats(const LumenVolume* v, int id, double* out);
 
 #ifdef __cplusplus

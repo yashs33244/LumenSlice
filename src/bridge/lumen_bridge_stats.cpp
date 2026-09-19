@@ -7,8 +7,10 @@
 //   - closed-surface measures need a surface first, so this file crops the label
 //     (shared mesh_crop.hpp) and marches it (marching_cubes) into a LOCAL mesh, then
 //     hands that to the core (compute_mesh_metrics).
-// It reads the mask + volume only and never touches the handle's live mesh buffers,
-// so it is safe to run off the main thread while the handle is pinned.
+// The measurement reads the frozen stats snapshot (lumen_seg_stats_snapshot, taken on
+// the main thread) plus the immutable HU volume, and writes no shared handle buffers,
+// so it is safe to run off the main thread while the handle is pinned - it never
+// touches the live mask or the 3D mesh buffers.
 
 #include "lumen_bridge.h"
 
@@ -22,13 +24,22 @@
 
 extern "C" {
 
+void lumen_seg_stats_snapshot(LumenVolume* v) {
+    if (v == nullptr || !v->editor.mask().valid()) return;
+    // Deep-copy the live mask on the caller's (main) thread. The subsequent
+    // lumen_seg_stats reads only this frozen copy, so a concurrent main-thread edit
+    // (paint, threshold, undo, ...) can never race the background measurement.
+    v->stats_mask = v->editor.mask();
+}
+
 void lumen_seg_stats(const LumenVolume* v, int id, double* out) {
     if (out == nullptr) return;
     for (int i = 0; i < LUMEN_STAT_COUNT; ++i) out[i] = 0.0;
     if (v == nullptr || id <= 0 || id > 255) return;
 
     const std::uint8_t label = static_cast<std::uint8_t>(id);
-    const lumen::LabelVolume& mask = v->editor.mask();
+    // Measure the frozen snapshot, never the live mask (see lumen_seg_stats_snapshot).
+    const lumen::LabelVolume& mask = v->stats_mask;
     if (!mask.valid()) return;
 
     // Voxel-derived measures (one pass over the volume). An absent label yields a

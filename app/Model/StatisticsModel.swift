@@ -75,6 +75,10 @@ final class StatisticsModel: ObservableObject {
         // Pin the handle so loading a new volume mid-measure defers the free rather
         // than freeing the mask under the background reader. Released in finish().
         guard let pinned = volume.pinHandle() else { return }
+        // Freeze the mask on the main actor before going off-thread, exactly like the
+        // 3D mesh path. The background task then measures only this frozen snapshot,
+        // so a concurrent main-actor edit (paint, threshold, undo) can't race it.
+        lumen_seg_stats_snapshot(pinned)
         isComputing = true
         let bits = UInt(bitPattern: pinned)
         let statCount = Int(LUMEN_STAT_COUNT)
