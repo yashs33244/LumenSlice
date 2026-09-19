@@ -654,6 +654,18 @@ static void test_statistics() {
     CHECK(std::abs(s2.hu_mean - 150.0) < 1e-6, "two-value HU mean is 150");
     CHECK(std::abs(s2.hu_stddev - 50.0) < 1e-6, "two-value population stddev is 50");
 
+    // A single-voxel segment: n == 1, so the population stddev is exactly 0 (the
+    // variance guard must not divide-by-zero or return a tiny negative).
+    Volume v1 = make_volume(6, 0.0f);
+    LabelVolume m1;
+    m1.reset_to(v1);
+    m1.set(3, 3, 3, 1);
+    set_hu(v1, 3, 3, 3, 42.0f);
+    const SegmentStats s1 = compute_label_stats(m1, v1, 1);
+    CHECK(s1.voxel_count == 1, "single-voxel segment counts one voxel");
+    CHECK(std::abs(s1.hu_mean - 42.0) < 1e-6 && s1.hu_stddev == 0.0,
+          "single voxel: mean is the value, stddev is 0");
+
     // Closed-surface metrics: march the same box at unit spacing. Marching cubes
     // chamfers edges/corners, so the enclosed volume is a little under the 64 mm^3
     // voxel volume but the same order of magnitude, and both measures are positive.
