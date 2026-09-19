@@ -289,6 +289,31 @@ const unsigned int* lumen_mesh_indices(const LumenVolume* v);
 // non-zero errno-style code.
 int lumen_mesh_write_stl(const LumenVolume* v, const char* path);
 
+// --- Per-segment statistics -------------------------------------------------
+// Quantify one segment: voxel-derived measures (count, volume, voxel-face surface
+// area, HU distribution) plus closed-surface measures from a marching-cubes surface
+// of the segment (triangle-area surface, divergence-theorem volume). Results are
+// returned in a caller-provided double array indexed by the LUMEN_STAT_* enum.
+
+enum {
+    LUMEN_STAT_VOXEL_COUNT = 0,       // labelled voxels (a whole number)
+    LUMEN_STAT_VOLUME_MM3,            // voxel_count * voxel volume
+    LUMEN_STAT_SURFACE_AREA_MM2,      // exposed voxel-face ("staircase") area
+    LUMEN_STAT_MESH_SURFACE_AREA_MM2, // closed-surface area (sum of triangle areas)
+    LUMEN_STAT_MESH_VOLUME_MM3,       // closed-surface volume (divergence theorem)
+    LUMEN_STAT_HU_MIN,
+    LUMEN_STAT_HU_MAX,
+    LUMEN_STAT_HU_MEAN,
+    LUMEN_STAT_HU_STDDEV,             // population standard deviation
+    LUMEN_STAT_COUNT                  // number of entries (array length)
+};
+
+// Fill `out` (at least LUMEN_STAT_COUNT doubles) with segment `id`'s statistics.
+// Zero-fills when `id` is empty or invalid. Reads the mask + volume only and writes
+// no handle state (it crops + marches into its own scratch), so it is safe to run on
+// a worker thread while the caller pins the handle against a concurrent volume swap.
+void lumen_seg_stats(const LumenVolume* v, int id, double* out);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,0 +1,69 @@
+// LumenSlice C bridge - per-segment statistics.
+//
+// One of the bridge translation units. Orchestrates the two halves of a segment
+// measurement across the language line into a flat double[] the Swift/Qt frontends
+// index by LUMEN_STAT_*:
+//   - voxel-derived measures come straight from the core (compute_label_stats);
+//   - closed-surface measures need a surface first, so this file crops the label
+//     (shared mesh_crop.hpp) and marches it (marching_cubes) into a LOCAL mesh, then
+//     hands that to the core (compute_mesh_metrics).
+// It reads the mask + volume only and never touches the handle's live mesh buffers,
+// so it is safe to run off the main thread while the handle is pinned.
+
+#include "lumen_bridge.h"
+
+#include <cstdint>
+#include <vector>
+
+#include "lumen_handle.hpp"
+#include "mesh_crop.hpp"
+#include "segmentation/marching_cubes.hpp"
+#include "segmentation/statistics.hpp"
+
+extern "C" {
+
+void lumen_seg_stats(const LumenVolume* v, int id, double* out) {
+    if (out == nullptr) return;
+    for (int i = 0; i < LUMEN_STAT_COUNT; ++i) out[i] = 0.0;
+    if (v == nullptr || id <= 0 || id > 255) return;
+
+    const std::uint8_t label = static_cast<std::uint8_t>(id);
+    const lumen::LabelVolume& mask = v->editor.mask();
+    if (!mask.valid()) return;
+
+    // Voxel-derived measures (one pass over the volume). An absent label yields a
+    // zero voxel_count; leave every field zero-filled in that case.
+    const lumen::SegmentStats s = lumen::compute_label_stats(mask, v->volume, label);
+    if (s.voxel_count == 0) return;
+
+    out[LUMEN_STAT_VOXEL_COUNT] = static_cast<double>(s.voxel_count);
+    out[LUMEN_STAT_VOLUME_MM3] = s.volume_mm3;
+    out[LUMEN_STAT_SURFACE_AREA_MM2] = s.surface_area_mm2;
+    out[LUMEN_STAT_HU_MIN] = s.hu_min;
+    out[LUMEN_STAT_HU_MAX] = s.hu_max;
+    out[LUMEN_STAT_HU_MEAN] = s.hu_mean;
+    out[LUMEN_STAT_HU_STDDEV] = s.hu_stddev;
+
+    // Closed-surface measures: crop this label into a local field (own buffer, so
+    // the handle's live 3D snapshot is untouched) and march it at full resolution
+    // with no smoothing for a faithful measurement. Area and the divergence-theorem
+    // volume are translation-invariant for the closed manifold, so the cropped-local
+    // vertices need no shift back into volume space.
+    std::vector<std::uint8_t> field;
+    const auto region = lumen_bridge_detail::crop_label_region(
+        mask, [label](std::uint8_t x) { return x == label; }, field);
+    if (region.w > 0) {
+        lumen::Mesh mesh;
+        const int tris = lumen::marching_cubes(
+            field.data(), region.w, region.h, region.d, v->volume.spacing_x,
+            v->volume.spacing_y, v->volume.spacing_z, /*smooth_iters=*/0,
+            /*downsample=*/1, mesh);
+        if (tris > 0) {
+            const lumen::MeshMetrics m = lumen::compute_mesh_metrics(mesh);
+            out[LUMEN_STAT_MESH_SURFACE_AREA_MM2] = m.surface_area_mm2;
+            out[LUMEN_STAT_MESH_VOLUME_MM3] = m.volume_mm3;
+        }
+    }
+}
+
+} // extern "C"
