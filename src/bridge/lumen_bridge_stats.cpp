@@ -54,15 +54,16 @@ void lumen_seg_stats(const LumenVolume* v, int id, double* out) {
     out[LUMEN_STAT_HU_MEAN] = s.hu_mean;
     out[LUMEN_STAT_HU_STDDEV] = s.hu_stddev;
 
-    // Surface area from a closed marching-cubes surface of this label. Crop into a
-    // local field (own buffer, so the handle's live 3D snapshot is untouched) and
-    // march at full resolution with light smoothing: the raw voxelized surface has a
-    // stair-step area far above the true one, so a couple of blur passes bring it in
-    // line with a clinical closed-surface area (calibrated against 3D Slicer on a
-    // whole-body bone segment: raw 24081 cm^2 -> smoothed 18037 cm^2 vs Slicer's
-    // 18462 cm^2). Area is winding-independent, so it stays reliable even where the
-    // divergence volume would not - which is why only the area is reported here, and
-    // the accurate volume comes from the label map above.
+    // Closed-surface volume + area from a marching-cubes surface of this label. Crop
+    // into a local field (own buffer, so the handle's live 3D snapshot is untouched;
+    // crop_label_region always pads a zero border so the surface closes even at the
+    // volume edge - the fix that made the enclosed volume faithful) and march at full
+    // resolution with light smoothing, matching 3D Slicer's closed-surface pipeline.
+    // Calibrated against Slicer on a whole-body bone segment (identical voxel count):
+    //   ours   Volume(CS) 2977 cm3, Surface 18076 cm2
+    //   Slicer Volume(CS) 3061 cm3, Surface 18462 cm2   (within ~2-3%; Volume(LM)
+    // matches exactly). Two blur passes bring the stair-step raw area (24132 cm2)
+    // down to a clinical closed-surface area.
     constexpr int kStatsSurfaceSmoothing = 2;
     std::vector<std::uint8_t> field;
     const auto region = lumen_bridge_detail::crop_label_region(
@@ -76,6 +77,7 @@ void lumen_seg_stats(const LumenVolume* v, int id, double* out) {
         if (tris > 0) {
             const lumen::MeshMetrics m = lumen::compute_mesh_metrics(mesh);
             out[LUMEN_STAT_SURFACE_AREA_MM2] = m.surface_area_mm2;
+            out[LUMEN_STAT_MESH_VOLUME_MM3] = m.volume_mm3;
         }
     }
 }

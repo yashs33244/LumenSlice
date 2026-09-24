@@ -29,9 +29,17 @@ struct CropRegion {
     int ox = 0, oy = 0, oz = 0;
 };
 
-// Crop `mask` to the voxels for which keep(id) is true, binarized to 0/1 into `out`
-// with a one-voxel zero margin (clamped to the volume). Returns the cropped
-// geometry; when nothing matches, clears `out` and returns a zero region.
+// Crop `mask` to the voxels for which keep(id) is true, binarized to 0/1 into `out`,
+// ALWAYS surrounded by a one-voxel zero border. Returns the cropped geometry; when
+// nothing matches, clears `out` and returns a zero region.
+//
+// The zero border is unconditional - even when the labelled region touches the
+// volume edge, we pad rather than clamp (matching 3D Slicer's vtkImageConstantPad).
+// Without it, a structure reaching the scan boundary would have no closing face
+// there, so marching cubes produced an OPEN surface and any enclosed-volume measure
+// (or a watertight STL) leaked. The origin may therefore be -1 (one voxel outside
+// the volume); that is fine - surface area and the divergence-theorem volume are
+// translation-invariant, and the 3D path shifts vertices by origin * spacing.
 template <class KeepFn>
 CropRegion crop_label_region(const lumen::LabelVolume& mask, KeepFn keep,
                              std::vector<std::uint8_t>& out) {
@@ -62,30 +70,28 @@ CropRegion crop_label_region(const lumen::LabelVolume& mask, KeepFn keep,
         return r;
     }
 
-    // One-voxel margin (clamped to the volume) so the field has a zero border.
-    x0 = std::max(0, x0 - 1);
-    y0 = std::max(0, y0 - 1);
-    z0 = std::max(0, z0 - 1);
-    x1 = std::min(W - 1, x1 + 1);
-    y1 = std::min(H - 1, y1 + 1);
-    z1 = std::min(D - 1, z1 + 1);
+    // Cropped box = the bounding box plus a one-voxel zero border on every side. The
+    // origin is bbox_min - 1 (may be -1); the border planes stay 0 from the fill.
+    r.ox = x0 - 1;
+    r.oy = y0 - 1;
+    r.oz = z0 - 1;
+    r.w = (x1 - x0 + 1) + 2;
+    r.h = (y1 - y0 + 1) + 2;
+    r.d = (z1 - z0 + 1) + 2;
+    out.assign(static_cast<std::size_t>(r.w) * r.h * r.d, 0);
 
-    r.w = x1 - x0 + 1;
-    r.h = y1 - y0 + 1;
-    r.d = z1 - z0 + 1;
-    r.ox = x0;
-    r.oy = y0;
-    r.oz = z0;
-    out.resize(static_cast<std::size_t>(r.w) * r.h * r.d);
-
-    std::size_t o = 0;
-    for (int z = z0; z <= z1; ++z)
+    // Copy the kept voxels into the interior (indices >= 1 on every axis).
+    for (int z = z0; z <= z1; ++z) {
         for (int y = y0; y <= y1; ++y) {
             const std::uint8_t* row =
                 src + (static_cast<std::size_t>(z) * H + y) * W;
+            const int lz = z - r.oz, ly = y - r.oy;
+            std::uint8_t* dst =
+                out.data() + (static_cast<std::size_t>(lz) * r.h + ly) * r.w;
             for (int x = x0; x <= x1; ++x)
-                out[o++] = keep(row[x]) ? 1 : 0;
+                if (keep(row[x])) dst[x - r.ox] = 1;
         }
+    }
     return r;
 }
 
