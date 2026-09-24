@@ -61,6 +61,7 @@ protected:
     void dragEnterEvent(QDragEnterEvent*) override;
     void dropEvent(QDropEvent*) override;
     void resizeEvent(QResizeEvent*) override;
+    void closeEvent(QCloseEvent*) override;
 
 private slots:
     void openFolder();

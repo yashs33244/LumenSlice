@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QCloseEvent>
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
@@ -1808,7 +1809,10 @@ void MainWindow::applyOtsu() {
 void MainWindow::runMaskOp(const QString& busyText, std::function<void()> op,
                            bool refreshMesh, bool captureUndo) {
     LumenVolume* v = st_.volume;
-    if (!v || st_.busy || heavyWatcher_.isRunning()) return;
+    // Also exclude an in-flight statistics measure: it reads the same volume
+    // off-thread, so a heavy op that adopts a deferred load would free it underneath.
+    if (!v || st_.busy || heavyWatcher_.isRunning() || statsWatcher_.isRunning())
+        return;
     if (captureUndo) {
         lumen_seg_push_undo(v);
         updateUndoRedo();
@@ -1823,8 +1827,8 @@ void MainWindow::runMaskOp(const QString& busyText, std::function<void()> op,
 
 void MainWindow::growFromSeeds() {
     LumenVolume* v = st_.volume;
-    if (!v || st_.busy || heavyWatcher_.isRunning() || growPreviewActive_ ||
-        growPreviewPending_) return;
+    if (!v || st_.busy || heavyWatcher_.isRunning() || statsWatcher_.isRunning() ||
+        growPreviewActive_ || growPreviewPending_) return;
     const float locality = seedLocalitySlider_ ? float(seedLocalitySlider_->value()) / 10.0f : 0.0f;
     growPreviewPending_ = true;
     runMaskOp("Growing from seeds…",
@@ -1887,7 +1891,10 @@ void MainWindow::redo() {
 // ---------------------------------------------------------------------------
 void MainWindow::generateMesh() {
     LumenVolume* v = st_.volume;
-    if (!v || generating_) return;
+    // Stay mutually exclusive with an in-flight statistics measure: both hold the
+    // raw volume pointer off-thread, and a load deferred during either must not be
+    // adopted (freeing the volume) while the other worker still reads it.
+    if (!v || generating_ || statsWatcher_.isRunning()) return;
     meshRefreshPending_ = false;
     meshRefreshTimer_.stop();
 
@@ -2732,6 +2739,16 @@ void MainWindow::showMetadataInspector() {
 // ---------------------------------------------------------------------------
 // Drag & drop
 // ---------------------------------------------------------------------------
+void MainWindow::closeEvent(QCloseEvent* e) {
+    // Let any off-thread worker that reads the volume finish before the window (and
+    // the BridgeVolume it owns) is destroyed, so a long-running measure or mesh/mask
+    // job can't outlive the handle it is reading.
+    if (statsWatcher_.isRunning()) statsWatcher_.waitForFinished();
+    if (meshWatcher_.isRunning()) meshWatcher_.waitForFinished();
+    if (heavyWatcher_.isRunning()) heavyWatcher_.waitForFinished();
+    QMainWindow::closeEvent(e);
+}
+
 void MainWindow::dragEnterEvent(QDragEnterEvent* e) {
     if (e->mimeData()->hasUrls()) {
         for (const QUrl& url : e->mimeData()->urls()) {
