@@ -2214,10 +2214,10 @@ QWidget* MainWindow::buildStatsPage() {
     auto* v = new QVBoxLayout(page);
     v->setContentsMargins(12, 12, 12, 12);
     statsTable_ = new QTableWidget;
-    statsTable_->setColumnCount(7);
+    statsTable_->setColumnCount(8);
     statsTable_->setHorizontalHeaderLabels(
-        {"Segment", "Voxels", "Volume (cm³)", "Surface (cm²)", "HU mean",
-         "HU σ", "HU range"});
+        {"Segment", "Voxels", "Volume LM (cm³)", "Volume CS (cm³)",
+         "Surface (cm²)", "HU mean", "HU σ", "HU range"});
     statsTable_->verticalHeader()->setVisible(false);
     statsTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     statsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -2255,10 +2255,12 @@ void MainWindow::populateStatsTable(const std::vector<std::vector<double>>& rows
         statsTable_->setItem(i, 2, new QTableWidgetItem(
                                        num(a[LUMEN_STAT_VOLUME_MM3] / 1000.0, 2)));
         statsTable_->setItem(i, 3, new QTableWidgetItem(
+                                       num(a[LUMEN_STAT_MESH_VOLUME_MM3] / 1000.0, 2)));
+        statsTable_->setItem(i, 4, new QTableWidgetItem(
                                        num(a[LUMEN_STAT_SURFACE_AREA_MM2] / 100.0, 2)));
-        statsTable_->setItem(i, 4, new QTableWidgetItem(num(a[LUMEN_STAT_HU_MEAN], 0)));
-        statsTable_->setItem(i, 5, new QTableWidgetItem(num(a[LUMEN_STAT_HU_STDDEV], 0)));
-        statsTable_->setItem(i, 6, new QTableWidgetItem(
+        statsTable_->setItem(i, 5, new QTableWidgetItem(num(a[LUMEN_STAT_HU_MEAN], 0)));
+        statsTable_->setItem(i, 6, new QTableWidgetItem(num(a[LUMEN_STAT_HU_STDDEV], 0)));
+        statsTable_->setItem(i, 7, new QTableWidgetItem(
                                        QString("%1 – %2")
                                            .arg(num(a[LUMEN_STAT_HU_MIN], 0),
                                                 num(a[LUMEN_STAT_HU_MAX], 0))));
@@ -2345,7 +2347,8 @@ void MainWindow::exportStatsCsv() {
     if (path.isEmpty()) return;
 
     QString csv =
-        "Segment,Voxels,Volume (mm^3),Volume (cm^3),Surface area (mm^2),"
+        "Segment,Voxels,Volume LM (mm^3),Volume LM (cm^3),"
+        "Volume CS (mm^3),Volume CS (cm^3),Surface area (mm^2),"
         "HU min,HU max,HU mean,HU stddev\n";
     auto f = [](double value) { return QString::number(value, 'f', 4); };
     for (size_t i = 0; i < lastStats_.size(); ++i) {
@@ -2353,11 +2356,13 @@ void MainWindow::exportStatsCsv() {
         QString name = i < pendingStatNames_.size() ? pendingStatNames_[i]
                                                      : QStringLiteral("Segment");
         name.replace("\"", "\"\"");
-        csv += QString("\"%1\",%2,%3,%4,%5,%6,%7,%8,%9\n")
+        csv += QString("\"%1\",%2,%3,%4,%5,%6,%7,%8,%9,%10,%11\n")
                    .arg(name)
                    .arg(static_cast<long long>(a[LUMEN_STAT_VOXEL_COUNT]))
                    .arg(f(a[LUMEN_STAT_VOLUME_MM3]))
                    .arg(f(a[LUMEN_STAT_VOLUME_MM3] / 1000.0))
+                   .arg(f(a[LUMEN_STAT_MESH_VOLUME_MM3]))
+                   .arg(f(a[LUMEN_STAT_MESH_VOLUME_MM3] / 1000.0))
                    .arg(f(a[LUMEN_STAT_SURFACE_AREA_MM2]))
                    .arg(f(a[LUMEN_STAT_HU_MIN]))
                    .arg(f(a[LUMEN_STAT_HU_MAX]))

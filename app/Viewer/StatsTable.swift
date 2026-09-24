@@ -12,10 +12,12 @@ struct StatsTable: View {
     @EnvironmentObject var model: VolumeModel
     @EnvironmentObject var stats: StatisticsModel
 
-    // Column titles and their relative widths.
+    // Column titles and their relative widths. Volume LM = voxel volume (reference,
+    // matches Slicer's Volume LM); Volume CS = closed-surface volume (Slicer's CS).
     private let columns: [(title: String, weight: CGFloat)] = [
-        ("Segment", 1.7), ("Voxels", 1.3), ("Volume (cm³)", 1.2),
-        ("Surface (cm²)", 1.2), ("HU mean", 0.9), ("HU σ", 0.8), ("HU range", 1.3),
+        ("Segment", 1.6), ("Voxels", 1.2), ("Volume LM (cm³)", 1.3),
+        ("Volume CS (cm³)", 1.3), ("Surface (cm²)", 1.2), ("HU mean", 0.9),
+        ("HU σ", 0.8), ("HU range", 1.2),
     ]
 
     var body: some View {
@@ -96,10 +98,11 @@ struct StatsTable: View {
             .frame(width: widths[0], alignment: .leading)
             cell(row.voxelCount.formatted(), widths[1])
             cell(cubicCentimetres(row.volumeMM3), widths[2])
-            cell(squareCentimetres(row.surfaceAreaMM2), widths[3])
-            cell(hu(row.huMean), widths[4])
-            cell(hu(row.huStdDev), widths[5])
-            cell("\(hu(row.huMin)) – \(hu(row.huMax))", widths[6])
+            cell(cubicCentimetres(row.meshVolumeMM3), widths[3])
+            cell(squareCentimetres(row.surfaceAreaMM2), widths[4])
+            cell(hu(row.huMean), widths[5])
+            cell(hu(row.huStdDev), widths[6])
+            cell("\(hu(row.huMin)) – \(hu(row.huMax))", widths[7])
         }
         .font(.system(.body, design: .rounded))
     }
