@@ -2221,7 +2221,10 @@ QWidget* MainWindow::buildStatsPage() {
     statsTable_->verticalHeader()->setVisible(false);
     statsTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     statsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    statsTable_->horizontalHeader()->setStretchLastSection(true);
+    // Spread every column across the viewport width so the data fills the canvas
+    // instead of bunching at the left with empty space on the right.
+    statsTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    statsTable_->horizontalHeader()->setMinimumSectionSize(72);
     statsTable_->setStyleSheet(
         "QTableWidget{background:#101216;color:#e6e8ee;gridline-color:#2a2f3a;"
         "border:none;font-size:13px;}"
@@ -2260,8 +2263,8 @@ void MainWindow::populateStatsTable(const std::vector<std::vector<double>>& rows
                                            .arg(num(a[LUMEN_STAT_HU_MIN], 0),
                                                 num(a[LUMEN_STAT_HU_MAX], 0))));
     }
-    statsTable_->resizeColumnsToContents();
-    statsTable_->horizontalHeader()->setStretchLastSection(true);
+    // Column widths are governed by the header's Stretch mode (buildStatsPage), so
+    // they always fill the viewport - no per-populate resize needed.
 }
 
 void MainWindow::measureStats() {
