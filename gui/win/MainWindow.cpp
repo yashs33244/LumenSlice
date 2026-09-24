@@ -8,10 +8,12 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QAbstractItemView>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -161,16 +163,21 @@ MainWindow::MainWindow() {
     panels_ = new QStackedWidget;
     panels_->setFixedWidth(kPanelWidth);
     st_.markups = &markups_;
-    panels_->addWidget(buildVisualizePanel());
-    panels_->addWidget(buildSegmentPanel());
-    panels_->addWidget(buildThreeDPanel());
-    panels_->addWidget(buildExportPanel());
-    panels_->addWidget(buildMarkupPanel());
+    panels_->addWidget(buildVisualizePanel());  // 0
+    panels_->addWidget(buildSegmentPanel());    // 1
+    panels_->addWidget(buildThreeDPanel());     // 2
+    panels_->addWidget(buildExportPanel());     // 3
+    panels_->addWidget(buildMarkupPanel());     // 4
+    panels_->addWidget(buildQuantifyPanel());   // 5
     rootLayout->addWidget(panels_);
 
     meshView_ = new MeshView;
     meshView_->setMarkupModel(&markups_);
-    rootLayout->addWidget(buildQuad(), 1);
+    // The canvas swaps between the tri-axis quad and the Quantify results table.
+    canvasStack_ = new QStackedWidget;
+    canvasStack_->addWidget(buildQuad());       // page 0: slice/3D quad
+    canvasStack_->addWidget(buildStatsPage());  // page 1: statistics table
+    rootLayout->addWidget(canvasStack_, 1);
 
     auto* rootWidget = new QWidget;
     rootWidget->setLayout(rootLayout);
@@ -178,6 +185,9 @@ MainWindow::MainWindow() {
 
     connect(&meshWatcher_, &QFutureWatcher<int>::finished, this,
             &MainWindow::onMeshReady);
+    connect(&statsWatcher_,
+            &QFutureWatcher<std::vector<std::vector<double>>>::finished, this,
+            &MainWindow::onStatsReady);
     connect(&loadWatcher_, &QFutureWatcher<LoadResult>::finished, this,
             &MainWindow::onLoadReady);
     connect(meshView_, &MeshView::scissorFinished, this,
@@ -268,9 +278,10 @@ QWidget* MainWindow::buildTabRail() {
         {QStyle::SP_ComputerIcon, "3D"},
         {QStyle::SP_DialogSaveButton, "Export"},
         {QStyle::SP_FileDialogInfoView, "Markups"},
+        {QStyle::SP_FileDialogContentsView, "Quantify"},
     };
     auto* group = new QButtonGroup(this);
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
         auto* b = new QToolButton;
         b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         b->setIcon(style()->standardIcon(items[i].icon));
@@ -1449,10 +1460,10 @@ void MainWindow::onLoadReady() {
     // A worker mesh generation owns the current handle until its finished
     // callback has copied the generated buffers. Hold the newly decoded handle
     // instead of replacing/freeing the old one underneath that worker.
-    if (generating_ || meshWatcher_.isRunning()) {
+    if (generating_ || meshWatcher_.isRunning() || statsWatcher_.isRunning()) {
         pendingLoad_ = r;
         hasPendingLoad_ = true;
-        setStatus("Volume loaded; waiting for the current surface job to finish…");
+        setStatus("Volume loaded; waiting for the current job to finish…");
         return;
     }
     adoptLoadedVolume(r);
@@ -1509,6 +1520,11 @@ void MainWindow::adoptLoadedVolume(const LoadResult& r) {
     updateMaskIndicator();  // a fresh load clears any intensity mask
     meshView_->clearMeshes();
     meshInfoLabel_->setText("No surface yet.");
+    // A fresh scan invalidates any measured statistics.
+    if (statsTable_) statsTable_->setRowCount(0);
+    lastStats_.clear();
+    if (statsInfoLabel_) statsInfoLabel_->setText(QString());
+    if (exportCsvBtn_) exportCsvBtn_->setEnabled(false);
 }
 
 void MainWindow::selectTab(int tab) {
@@ -1525,10 +1541,17 @@ void MainWindow::selectTab(int tab) {
     // Segment tab enables canvas tool interactions; others keep left-drag = W/L.
     st_.segmentInteractive = (tab == 1);
     setThreeDTabLayout(tab == 2);
+    // The Quantify tab (5) shows the results table instead of the slice/3D quad.
+    if (canvasStack_) canvasStack_->setCurrentIndex(tab == 5 ? 1 : 0);
     // Markup placement is only active on the Markups tab with the toggle on.
     st_.markupPlacing = (tab == 4) && markups_.placing();
     if (tab == 3) rebuildExportSegmentList();  // reflect current segments/names
     if (tab == 4) rebuildMarkupList();
+    if (tab == 5 && measureStatsBtn_) {
+        // Reflect whether there is anything to measure whenever the tab opens.
+        measureStatsBtn_->setEnabled(
+            st_.volume && lumen_seg_count(st_.volume) > 0 && !statsWatcher_.isRunning());
+    }
     refreshCanvas();
 }
 
@@ -2130,6 +2153,215 @@ void MainWindow::exportPng() {
     exportMsgLabel_->setText(img.copy().save(path, "PNG")
                                  ? QString("Saved %1").arg(QFileInfo(path).fileName())
                                  : "PNG export failed.");
+}
+
+// ---------------------------------------------------------------------------
+// Quantify (per-segment statistics)
+// ---------------------------------------------------------------------------
+QWidget* MainWindow::buildQuantifyPanel() {
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    auto* page = new QWidget;
+    auto* v = new QVBoxLayout(page);
+    v->setSpacing(10);
+
+    auto* measureBox = infoSection(
+        "Measure",
+        "Computes each non-empty segment's volume (from the voxel label map, the "
+        "accurate figure), the closed-surface area, and the HU distribution. Results "
+        "show in the table to the right.");
+    measureStatsBtn_ = new QPushButton("Measure segments");
+    measureStatsBtn_->setObjectName("accent");
+    measureStatsBtn_->setToolTip("Measure every non-empty segment.");
+    connect(measureStatsBtn_, &QPushButton::clicked, this,
+            &MainWindow::measureStats);
+    body(measureBox)->addWidget(measureStatsBtn_);
+    statsInfoLabel_ = new QLabel;
+    statsInfoLabel_->setWordWrap(true);
+    body(measureBox)->addWidget(statsInfoLabel_);
+    v->addWidget(measureBox);
+
+    auto* exportBox = infoSection(
+        "Export",
+        "Save the measured table as a CSV file (geometry in millimetres). Measure "
+        "first if the button is disabled.");
+    exportCsvBtn_ = new QPushButton("Export CSV…");
+    exportCsvBtn_->setToolTip("Save the measured statistics as a CSV file.");
+    exportCsvBtn_->setEnabled(false);
+    connect(exportCsvBtn_, &QPushButton::clicked, this,
+            &MainWindow::exportStatsCsv);
+    body(exportBox)->addWidget(exportCsvBtn_);
+    statsMsgLabel_ = new QLabel;
+    statsMsgLabel_->setWordWrap(true);
+    body(exportBox)->addWidget(statsMsgLabel_);
+    v->addWidget(exportBox);
+
+    v->addStretch();
+    finishPanel(scroll, page);
+    return scroll;
+}
+
+QWidget* MainWindow::buildStatsPage() {
+    auto* page = new QWidget;
+    page->setStyleSheet("background:#101216;");
+    auto* v = new QVBoxLayout(page);
+    v->setContentsMargins(12, 12, 12, 12);
+    statsTable_ = new QTableWidget;
+    statsTable_->setColumnCount(7);
+    statsTable_->setHorizontalHeaderLabels(
+        {"Segment", "Voxels", "Volume (cm³)", "Surface (cm²)", "HU mean",
+         "HU σ", "HU range"});
+    statsTable_->verticalHeader()->setVisible(false);
+    statsTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    statsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    statsTable_->horizontalHeader()->setStretchLastSection(true);
+    statsTable_->setStyleSheet(
+        "QTableWidget{background:#101216;color:#e6e8ee;gridline-color:#2a2f3a;"
+        "border:none;font-size:13px;}"
+        "QHeaderView::section{background:#181b22;color:#aeb4c1;border:none;"
+        "padding:6px 10px;}");
+    v->addWidget(statsTable_);
+    return page;
+}
+
+void MainWindow::populateStatsTable(const std::vector<std::vector<double>>& rows) {
+    if (!statsTable_) return;
+    statsTable_->setRowCount(int(rows.size()));
+    auto num = [](double value, int dec) { return QString::number(value, 'f', dec); };
+    for (int i = 0; i < int(rows.size()); ++i) {
+        const std::vector<double>& a = rows[size_t(i)];
+        const QString name = size_t(i) < pendingStatNames_.size()
+                                 ? pendingStatNames_[size_t(i)]
+                                 : QStringLiteral("Segment");
+        auto* nameItem = new QTableWidgetItem(name);
+        if (size_t(i) < pendingStatColors_.size()) {
+            QPixmap swatch(12, 12);
+            swatch.fill(pendingStatColors_[size_t(i)]);
+            nameItem->setIcon(QIcon(swatch));
+        }
+        statsTable_->setItem(i, 0, nameItem);
+        statsTable_->setItem(i, 1, new QTableWidgetItem(QString::number(
+                                       static_cast<long long>(a[LUMEN_STAT_VOXEL_COUNT]))));
+        statsTable_->setItem(i, 2, new QTableWidgetItem(
+                                       num(a[LUMEN_STAT_VOLUME_MM3] / 1000.0, 2)));
+        statsTable_->setItem(i, 3, new QTableWidgetItem(
+                                       num(a[LUMEN_STAT_SURFACE_AREA_MM2] / 100.0, 2)));
+        statsTable_->setItem(i, 4, new QTableWidgetItem(num(a[LUMEN_STAT_HU_MEAN], 0)));
+        statsTable_->setItem(i, 5, new QTableWidgetItem(num(a[LUMEN_STAT_HU_STDDEV], 0)));
+        statsTable_->setItem(i, 6, new QTableWidgetItem(
+                                       QString("%1 – %2")
+                                           .arg(num(a[LUMEN_STAT_HU_MIN], 0),
+                                                num(a[LUMEN_STAT_HU_MAX], 0))));
+    }
+    statsTable_->resizeColumnsToContents();
+    statsTable_->horizontalHeader()->setStretchLastSection(true);
+}
+
+void MainWindow::measureStats() {
+    LumenVolume* v = st_.volume;
+    if (!v || st_.busy || statsWatcher_.isRunning() || generating_ ||
+        meshWatcher_.isRunning() || heavyWatcher_.isRunning())
+        return;
+
+    // Snapshot the segment identity (id + name + colour) on the UI thread.
+    std::vector<long> hist(256, 0);
+    lumen_seg_label_histogram(v, hist.data());
+    pendingStatIds_.clear();
+    pendingStatNames_.clear();
+    pendingStatColors_.clear();
+    const int count = lumen_seg_segment_count(v);
+    for (int i = 0; i < count; ++i) {
+        const int id = lumen_seg_segment_id_at(v, i);
+        if (id > 0 && id < 256 && hist[size_t(id)] > 0) {
+            pendingStatIds_.push_back(id);
+            pendingStatNames_.push_back(
+                segNames_.value(id, QString("Segment %1").arg(id)));
+            int r = 200, g = 200, b = 200;
+            lumen_seg_get_color(v, id, &r, &g, &b);
+            pendingStatColors_.push_back(QColor(r, g, b));
+        }
+    }
+    if (pendingStatIds_.empty()) {
+        statsInfoLabel_->setText("Segment a structure first (Segment tab).");
+        return;
+    }
+
+    // Freeze the mask on the UI thread, then measure each segment off-thread so the
+    // background read never races a concurrent mask edit (mirrors the 3D path).
+    lumen_seg_stats_snapshot(v);
+    measureStatsBtn_->setEnabled(false);
+    measureStatsBtn_->setText("Measuring…");
+    const std::vector<int> ids = pendingStatIds_;
+    statsWatcher_.setFuture(QtConcurrent::run([v, ids] {
+        std::vector<std::vector<double>> rows;
+        rows.reserve(ids.size());
+        for (int id : ids) {
+            std::vector<double> a(LUMEN_STAT_COUNT, 0.0);
+            lumen_seg_stats(v, id, a.data());
+            rows.push_back(std::move(a));
+        }
+        return rows;
+    }));
+}
+
+void MainWindow::onStatsReady() {
+    lastStats_ = statsWatcher_.result();
+    if (measureStatsBtn_) {
+        measureStatsBtn_->setText("Measure segments");
+        measureStatsBtn_->setEnabled(st_.volume && lumen_seg_count(st_.volume) > 0);
+    }
+    populateStatsTable(lastStats_);
+    if (statsInfoLabel_) {
+        statsInfoLabel_->setText(QString("%1 segment%2 measured.")
+                                     .arg(lastStats_.size())
+                                     .arg(lastStats_.size() == 1 ? "" : "s"));
+    }
+    if (exportCsvBtn_) exportCsvBtn_->setEnabled(!lastStats_.empty());
+
+    // A load that arrived mid-measurement was deferred; adopt it now.
+    if (hasPendingLoad_) {
+        const LoadResult next = pendingLoad_;
+        pendingLoad_ = {};
+        hasPendingLoad_ = false;
+        adoptLoadedVolume(next);
+    }
+}
+
+void MainWindow::exportStatsCsv() {
+    if (lastStats_.empty()) return;
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Export statistics CSV",
+        QDir::homePath() + "/SurgNetra-statistics.csv", "CSV (*.csv)");
+    if (path.isEmpty()) return;
+
+    QString csv =
+        "Segment,Voxels,Volume (mm^3),Volume (cm^3),Surface area (mm^2),"
+        "HU min,HU max,HU mean,HU stddev\n";
+    auto f = [](double value) { return QString::number(value, 'f', 4); };
+    for (size_t i = 0; i < lastStats_.size(); ++i) {
+        const std::vector<double>& a = lastStats_[i];
+        QString name = i < pendingStatNames_.size() ? pendingStatNames_[i]
+                                                     : QStringLiteral("Segment");
+        name.replace("\"", "\"\"");
+        csv += QString("\"%1\",%2,%3,%4,%5,%6,%7,%8,%9\n")
+                   .arg(name)
+                   .arg(static_cast<long long>(a[LUMEN_STAT_VOXEL_COUNT]))
+                   .arg(f(a[LUMEN_STAT_VOLUME_MM3]))
+                   .arg(f(a[LUMEN_STAT_VOLUME_MM3] / 1000.0))
+                   .arg(f(a[LUMEN_STAT_SURFACE_AREA_MM2]))
+                   .arg(f(a[LUMEN_STAT_HU_MIN]))
+                   .arg(f(a[LUMEN_STAT_HU_MAX]))
+                   .arg(f(a[LUMEN_STAT_HU_MEAN]))
+                   .arg(f(a[LUMEN_STAT_HU_STDDEV]));
+    }
+    QFile file(path);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        file.write(csv.toUtf8());
+        file.close();
+        statsMsgLabel_->setText(QString("Saved %1").arg(QFileInfo(path).fileName()));
+    } else {
+        statsMsgLabel_->setText("CSV export failed.");
+    }
 }
 
 // ---------------------------------------------------------------------------
