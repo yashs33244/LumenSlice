@@ -2356,18 +2356,23 @@ void MainWindow::exportStatsCsv() {
         QString name = i < pendingStatNames_.size() ? pendingStatNames_[i]
                                                      : QStringLiteral("Segment");
         name.replace("\"", "\"\"");
-        csv += QString("\"%1\",%2,%3,%4,%5,%6,%7,%8,%9,%10,%11\n")
-                   .arg(name)
-                   .arg(static_cast<long long>(a[LUMEN_STAT_VOXEL_COUNT]))
-                   .arg(f(a[LUMEN_STAT_VOLUME_MM3]))
-                   .arg(f(a[LUMEN_STAT_VOLUME_MM3] / 1000.0))
-                   .arg(f(a[LUMEN_STAT_MESH_VOLUME_MM3]))
-                   .arg(f(a[LUMEN_STAT_MESH_VOLUME_MM3] / 1000.0))
-                   .arg(f(a[LUMEN_STAT_SURFACE_AREA_MM2]))
-                   .arg(f(a[LUMEN_STAT_HU_MIN]))
-                   .arg(f(a[LUMEN_STAT_HU_MAX]))
-                   .arg(f(a[LUMEN_STAT_HU_MEAN]))
-                   .arg(f(a[LUMEN_STAT_HU_STDDEV]));
+        // Build the numeric fields via arg() first, then prepend the quoted name
+        // by concatenation. A free-text segment name can contain a literal "%2"
+        // etc.; routing it through arg() would let it be picked up as a marker and
+        // corrupt the row, so the name never touches the arg() machinery.
+        const QString fields =
+            QString("%1,%2,%3,%4,%5,%6,%7,%8,%9,%10\n")
+                .arg(static_cast<long long>(a[LUMEN_STAT_VOXEL_COUNT]))
+                .arg(f(a[LUMEN_STAT_VOLUME_MM3]))
+                .arg(f(a[LUMEN_STAT_VOLUME_MM3] / 1000.0))
+                .arg(f(a[LUMEN_STAT_MESH_VOLUME_MM3]))
+                .arg(f(a[LUMEN_STAT_MESH_VOLUME_MM3] / 1000.0))
+                .arg(f(a[LUMEN_STAT_SURFACE_AREA_MM2]))
+                .arg(f(a[LUMEN_STAT_HU_MIN]))
+                .arg(f(a[LUMEN_STAT_HU_MAX]))
+                .arg(f(a[LUMEN_STAT_HU_MEAN]))
+                .arg(f(a[LUMEN_STAT_HU_STDDEV]));
+        csv += "\"" + name + "\"," + fields;
     }
     QFile file(path);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
