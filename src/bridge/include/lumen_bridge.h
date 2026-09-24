@@ -290,22 +290,26 @@ const unsigned int* lumen_mesh_indices(const LumenVolume* v);
 int lumen_mesh_write_stl(const LumenVolume* v, const char* path);
 
 // --- Per-segment statistics -------------------------------------------------
-// Quantify one segment: voxel-derived measures (count, volume, voxel-face surface
-// area, HU distribution) plus closed-surface measures from a marching-cubes surface
-// of the segment (triangle-area surface, divergence-theorem volume). Results are
-// returned in a caller-provided double array indexed by the LUMEN_STAT_* enum.
+// Quantify one segment into a caller-provided double array indexed by LUMEN_STAT_*:
+//   - Volume is the label-map (voxel-count * voxel-volume) figure. This is the
+//     accurate, reference measure and matches 3D Slicer's "Volume (LM)" exactly.
+//   - Surface area is measured on a marching-cubes closed surface of the segment
+//     with light smoothing, so it is comparable to a clinical closed-surface area
+//     (3D Slicer's "Surface area") rather than the inflated raw voxel-face area.
+//   - HU min/max/mean/stddev describe the intensity distribution over the voxels.
+// We intentionally do NOT expose a closed-surface *volume*: marching cubes badly
+// under-estimates enclosed volume for thin/complex anatomy, so the voxel volume
+// above is the trustworthy figure.
 
 enum {
-    LUMEN_STAT_VOXEL_COUNT = 0,       // labelled voxels (a whole number)
-    LUMEN_STAT_VOLUME_MM3,            // voxel_count * voxel volume
-    LUMEN_STAT_SURFACE_AREA_MM2,      // exposed voxel-face ("staircase") area
-    LUMEN_STAT_MESH_SURFACE_AREA_MM2, // closed-surface area (sum of triangle areas)
-    LUMEN_STAT_MESH_VOLUME_MM3,       // closed-surface volume (divergence theorem)
+    LUMEN_STAT_VOXEL_COUNT = 0,  // labelled voxels (a whole number)
+    LUMEN_STAT_VOLUME_MM3,       // voxel_count * voxel volume (label-map volume)
+    LUMEN_STAT_SURFACE_AREA_MM2, // closed-surface area, lightly smoothed
     LUMEN_STAT_HU_MIN,
     LUMEN_STAT_HU_MAX,
     LUMEN_STAT_HU_MEAN,
-    LUMEN_STAT_HU_STDDEV,             // population standard deviation
-    LUMEN_STAT_COUNT                  // number of entries (array length)
+    LUMEN_STAT_HU_STDDEV,        // population standard deviation
+    LUMEN_STAT_COUNT             // number of entries (array length)
 };
 
 // Freeze the current mask into the handle's statistics snapshot. Main-thread only,

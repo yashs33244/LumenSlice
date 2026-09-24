@@ -9,10 +9,8 @@ struct SegmentStatsRow: Identifiable, Equatable {
     var name: String
     var color: Color
     var voxelCount: Int
-    var volumeMM3: Double          // voxel count * voxel volume
-    var surfaceAreaMM2: Double     // exposed voxel-face ("staircase") area
-    var meshVolumeMM3: Double      // closed-surface (divergence-theorem) volume
-    var meshSurfaceAreaMM2: Double // closed-surface (sum-of-triangle) area
+    var volumeMM3: Double       // label-map (voxel) volume - the accurate figure
+    var surfaceAreaMM2: Double  // closed-surface area, lightly smoothed
     var huMin: Double
     var huMax: Double
     var huMean: Double
@@ -98,8 +96,6 @@ final class StatisticsModel: ObservableObject {
                     voxelCount: Int(buf[Int(LUMEN_STAT_VOXEL_COUNT)]),
                     volumeMM3: buf[Int(LUMEN_STAT_VOLUME_MM3)],
                     surfaceAreaMM2: buf[Int(LUMEN_STAT_SURFACE_AREA_MM2)],
-                    meshVolumeMM3: buf[Int(LUMEN_STAT_MESH_VOLUME_MM3)],
-                    meshSurfaceAreaMM2: buf[Int(LUMEN_STAT_MESH_SURFACE_AREA_MM2)],
                     huMin: buf[Int(LUMEN_STAT_HU_MIN)],
                     huMax: buf[Int(LUMEN_STAT_HU_MAX)],
                     huMean: buf[Int(LUMEN_STAT_HU_MEAN)],
@@ -123,14 +119,12 @@ final class StatisticsModel: ObservableObject {
     // when there is nothing measured.
     func csv() -> String {
         guard !rows.isEmpty else { return "" }
-        var out = "Segment,Voxels,Volume (mm^3),Surface area (mm^2),"
-            + "Closed volume (mm^3),Closed surface (mm^2),"
+        var out = "Segment,Voxels,Volume (mm^3),Volume (cm^3),Surface area (mm^2),"
             + "HU min,HU max,HU mean,HU stddev\n"
         for r in rows {
             let name = "\"" + r.name.replacingOccurrences(of: "\"", with: "\"\"") + "\""
             out += "\(name),\(r.voxelCount),"
-                + "\(fmt(r.volumeMM3)),\(fmt(r.surfaceAreaMM2)),"
-                + "\(fmt(r.meshVolumeMM3)),\(fmt(r.meshSurfaceAreaMM2)),"
+                + "\(fmt(r.volumeMM3)),\(fmt(r.volumeMM3 / 1000.0)),\(fmt(r.surfaceAreaMM2)),"
                 + "\(fmt(r.huMin)),\(fmt(r.huMax)),\(fmt(r.huMean)),\(fmt(r.huStdDev))\n"
         }
         return out

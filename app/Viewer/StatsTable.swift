@@ -68,7 +68,7 @@ struct StatsTable: View {
                     }
                     numeric(row.voxelCount.formatted())
                     numeric(cubicCentimetres(row.volumeMM3))
-                    numeric(squareCentimetres(row.meshSurfaceAreaMM2))
+                    numeric(squareCentimetres(row.surfaceAreaMM2))
                     numeric(hu(row.huMean))
                     numeric(hu(row.huStdDev))
                     numeric("\(hu(row.huMin)) – \(hu(row.huMax))")
